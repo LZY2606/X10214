@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>捕获轨迹室 · Capture Trace Room</title>
+<style>
+:root{
+  --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --line:#2a2f3a;
+  --fg:#e6e9ef; --muted:#8b93a7; --accent:#7cc4ff; --ok:#59d39b;
+  --bad:#ff7b82; --warn:#ffc46b; --purple:#c39bff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB",sans-serif}
+header{padding:14px 20px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+header h1{margin:0;font-size:20px;letter-spacing:2px}
+header .ver{color:var(--muted);font-size:12px}
+.wrap{display:grid;grid-template-columns:380px 1fr;gap:14px;padding:14px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.panel h2{margin:0 0 10px;font-size:13px;color:var(--accent);letter-spacing:1px}
+label{display:block;color:var(--muted);margin:8px 0 3px}
+input[type=text],textarea,select{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--fg);border-radius:6px;padding:7px 9px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+textarea{resize:vertical;min-height:34px}
+.row{display:flex;gap:8px}
+.row>*{flex:1}
+button{background:#253044;color:var(--fg);border:1px solid #34415c;border-radius:6px;padding:7px 12px;cursor:pointer;font-size:12px}
+button:hover{background:#2d3c56}
+button.primary{background:#1d4e89;border-color:#2f6bb5}
+button:disabled{opacity:.45;cursor:not-allowed}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{text-align:left;padding:3px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--panel)}
+.code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;word-break:break-all}
+.scroll{max-height:300px;overflow:auto}
+.badge{display:inline-block;padding:1px 8px;border-radius:99px;font-size:11px;border:1px solid var(--line)}
+.b-match{color:var(--ok);border-color:#2c5b46;background:#14281f}
+.b-no{color:var(--bad);border-color:#5c2f33;background:#2a1719}
+.b-ind{color:var(--warn);border-color:#6b5326;background:#2a2213}
+.b-run{color:var(--accent);border-color:#2c4a66;background:#12202e}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.mut{color:var(--muted)}.purple{color:var(--purple)}
+.action-char{color:var(--ok)} .action-fail{color:var(--bad)} .action-backtrack{color:var(--warn)}
+.action-branch{color:var(--accent)} .action-capture{color:var(--purple)} .action-match{color:var(--ok);font-weight:700}
+.action-start{color:var(--muted)} .action-assert-ok{color:var(--ok)}
+.depth1{padding-left:14px;color:#b9a7e6}
+.depth2{padding-left:28px;color:#8fd4c0}
+.marker{background:#2b5a8f;color:#fff;border-radius:3px}
+ul.tight{margin:4px 0;padding-left:18px}ul.tight li{margin:2px 0}
+small.hint{color:var(--muted)}
+.pill{font-family:ui-monospace,Menlo,monospace;background:var(--panel2);border:1px solid var(--line);border-radius:4px;padding:0 4px}
+#inputView{font-family:ui-monospace,Menlo,monospace;font-size:15px;min-height:24px;white-space:pre-wrap;word-break:break-all}
+</style>
+</head>
+<body>
+<header>
+  <h1>捕获轨迹室</h1>
+  <span class="ver">Capture Trace Room — 自有回溯执行模型（不调用宿主正则库求结果）</span>
+  <span class="ver" id="versions"></span>
+</header>
+<div class="wrap">
+  <div class="panel">
+    <h2>执行控制台</h2>
+    <label>Pattern</label>
+    <textarea id="pattern" spellcheck="false">(?&lt;word&gt;a+)(?=b)\s\1?</textarea>
+    <label>Input</label>
+    <textarea id="input" spellcheck="false">aaa b</textarea>
+    <div class="row">
+      <div><label>步数预算</label><input type="text" id="bSteps" value="200000"></div>
+      <div><label>状态数预算</label><input type="text" id="bStates" value="20000"></div>
+      <div><label>快照预算</label><input type="text" id="bSnaps" value="400000"></div>
+    </div>
+    <label><input type="checkbox" id="optimize"> 启用保持次序的 AST 优化</label>
+    <div class="row" style="margin-top:8px">
+      <button class="primary" onclick="runFull()">运行完整轨迹</button>
+      <button onclick="parseOnly()">解析 AST</button>
+    </div>
+    <h2 style="margin-top:14px">单步 / 断点 / Frontier</h2>
+    <div class="row">
+      <button onclick="newSession()">创建会话</button>
+      <button onclick="stepN(1)">单步</button>
+      <button onclick="stepN(20)">20 步</button>
+    </div>
+    <label>断点（指令 PC，逗号分隔；命中后暂停）</label>
+    <input type="text" id="breakpoints" value="">
+    <div class="row" style="margin-top:6px">
+      <button onclick="runToBreakpoint()">运行到断点</button>
+      <button onclick="resumeFrontier()">从 frontier 继续（+10×预算）</button>
+    </div>
+    <small class="hint">会话 id：<span id="sessId" class="pill">—</span> <span id="sessStatus"></span></small>
+  </div>
+
+  <div>
+    <div class="panel" style="margin-bottom:14px">
+      <h2>状态总览</h2>
+      <div id="summary" class="mut">尚未执行。</div>
+      <div id="inputView" style="margin-top:8px"></div>
+    </div>
+    <div class="grid2">
+      <div class="panel">
+        <h2>AST</h2>
+        <div id="ast" class="code scroll" style="max-height:220px"></div>
+      </div>
+      <div class="panel">
+        <h2>指令程序（PC）</h2>
+        <div id="prog" class="code scroll" style="max-height:220px"></div>
+      </div>
+    </div>
+    <div class="grid2" style="margin-top:14px">
+      <div class="panel">
+        <h2>捕获组更新</h2>
+        <div id="captures"><small class="hint">—</small></div>
+      </div>
+      <div class="panel">
+        <h2>活跃状态 / 被剪枝分支</h2>
+        <div id="states" class="scroll" style="max-height:220px"><small class="hint">—</small></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap" style="display:block;padding-top:0">
+  <div class="panel">
+    <h2>匹配轨迹（分支 · 捕获 · 失败回退）</h2>
+    <div class="scroll" style="max-height:420px">
+      <table>
+        <thead><tr><th>#</th><th>pc</th><th>指令</th><th>位置(rune/byte)</th><th>动作</th><th>细节</th><th>捕获槽</th></tr></thead>
+        <tbody id="trace"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="wrap" style="display:block;padding-top:0">
+  <div class="grid2">
+    <div class="panel">
+      <h2>语义差分（有限反例）</h2>
+      <div class="row">
+        <div><label>Pattern A</label><input type="text" id="diffA" value="a+"></div>
+        <div><label>Pattern B</label><input type="text" id="diffB" value="aa*"></div>
+      </div>
+      <div class="row">
+        <div><label>最大长度</label><input type="text" id="diffMaxLen" value="4"></div>
+        <div><label>最多反例</label><input type="text" id="diffMaxRes" value="50"></div>
+      </div>
+      <div style="margin-top:8px"><button class="primary" onclick="runDiff()">求差分</button></div>
+      <div id="diffOut" style="margin-top:8px"></div>
+    </div>
+    <div class="panel">
+      <h2>最近持久化运行（SQLite）</h2>
+      <div style="margin-bottom:6px"><button onclick="loadRuns()">刷新</button></div>
+      <div class="scroll" style="max-height:240px"><table>
+        <thead><tr><th>#</th><th>pattern</th><th>input</th><th>状态</th><th>版本</th><th>时间</th></tr></thead>
+        <tbody id="runs"></tbody>
+      </table></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap" style="display:block;padding-top:0">
+  <div class="panel">
+    <h2>语义次序与预算说明</h2>
+    <ul class="tight mut">
+      <li>分支次序固定：<code>|</code> 分支从左到右；贪婪量词先试继续，惰性量词先试退出；整体为最左最先（leftmost-first）。任何优化都保持这次序。</li>
+      <li>捕获回滚：每条待选分支保存捕获槽快照；回退时整体恢复，参与过但最终被撤销的捕获不会泄漏。</li>
+      <li>零宽重复：每个量词循环带有位置守卫，空进度立即终止，不消耗预算死循环。</li>
+      <li>位置双坐标：轨迹同时给出 rune（code point）偏移与 UTF-8 字节偏移；非法 UTF-8 字节按 U+FFFD（宽 1 字节）处理。</li>
+      <li>预算：步数 / 状态数 / 捕获快照数。超限一律返回 <code>indeterminate</code> 并附带可恢复 frontier，绝不冒充 no-match；预算为累计总额。</li>
+      <li>反向引用未命中的组时失败；<code>$</code> 在文本末尾或最后一个 <code>\n</code> 之前成功；<code>\d\w\s</code> 与 <code>\p{…}</code> 基于所钉住版本的 Unicode 数据。</li>
+    </ul>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+let sessionId = null;
+
+function budget(){
+  return {maxSteps: +$('bSteps').value || 0, maxStates: +$('bStates').value || 0, maxSnapshots: +$('bSnaps').value || 0};
+}
+async function api(path, body){
+  const res = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body || {})});
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.error || ('HTTP '+res.status));
+  return data;
+}
+function esc(s){ return String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function badge(status){
+  const map = {'match':'b-match','no-match':'b-no','indeterminate':'b-ind','running':'b-run'};
+  return '<span class="badge '+(map[status]||'')+'">'+esc(status)+'</span>';
+}
+function renderInput(input, pos){
+  if(pos == null || pos < 0) return esc(input);
+  const runes = Array.from(input);
+  if(pos > runes.length) pos = runes.length;
+  const before = runes.slice(0, pos).join('');
+  const at = runes[pos] || '';
+  const after = runes.slice(pos+1).join('');
+  return esc(before) + '<span class="marker">'+(at===''?'∅':esc(at))+'</span>' + esc(after)
+    + ' <small class="mut">rune '+pos+'</small>';
+}
+function capsCells(saved, names){
+  if(!saved) return '—';
+  let out = [];
+  for(let i=0;i<saved.length;i+=2){
+    const a=saved[i], b=saved[i+1];
+    if(a>=0 && b>=0) out.push('<span class="pill">g'+(i>>1)+':'+a+'-'+b+'</span>');
+  }
+  return out.join(' ') || '—';
+}
+function renderCaptures(result){
+  if(!result || !result.captures){ $('captures').innerHTML='<small class="hint">—</small>'; return; }
+  let h='<table><thead><tr><th>#</th><th>名</th><th>区间(rune)</th><th>区间(byte)</th><th>文本</th></tr></thead><tbody>';
+  for(const c of result.captures){
+    h += '<tr><td>'+c.index+'</td><td>'+esc(c.name||'')+'</td>'
+      + '<td class="'+(c.set?'ok':'mut')+'">'+(c.set? c.start+'..'+c.end : 'unset')+'</td>'
+      + '<td class="mut">'+(c.set? c.startByte+'..'+c.endByte : '—')+'</td>'
+      + '<td><code>'+(c.set?esc(c.text):'—')+'</code></td></tr>';
+  }
+  $('captures').innerHTML = h+'</tbody></table>';
+}
+function renderStates(cur, stack, pruned){
+  let h = '';
+  h += '<div>当前线程：'+(cur
+    ? '<span class="pill">pc='+cur.pc+' pos='+cur.pos+'</span> '+capsCells(cur.saved)
+    : '<small class="hint">无（待回退或下一起点）</small>')+'</div>';
+  h += '<div style="margin-top:6px">待选状态栈（'+(stack?stack.length:0)+'）：</div>';
+  if(stack && stack.length){
+    h += '<ul class="tight">';
+    for(let i=stack.length-1;i>=0;i--){
+      h += '<li class="mut">pc='+stack[i].pc+' pos='+stack[i].pos+' '+capsCells(stack[i].saved)+'</li>';
+    }
+    h += '</ul>';
+  }
+  if(pruned && pruned.length){
+    h += '<div class="bad">匹配确定后被剪枝的分支：'+pruned.length+' 条（pc: '+
+      pruned.slice(0,20).map(t=>t.pc).join(', ')+(pruned.length>20?' …':'')+'）</div>';
+  }
+  $('states').innerHTML = h;
+}
+function renderTrace(events, reset){
+  if(reset) $('trace').innerHTML='';
+  const tb=$('trace');
+  for(const e of events){
+    const tr=document.createElement('tr');
+    if(e.depth>0) tr.className='depth'+Math.min(e.depth,2);
+    tr.innerHTML='<td>'+e.step+'</td><td>'+e.pc+'</td><td>'+esc(e.op)+'</td>'
+      +'<td>'+e.pos+' / '+e.byte+'</td>'
+      +'<td class="action-'+esc(e.action)+'">'+esc(e.action)+'</td>'
+      +'<td class="mut">'+esc(e.detail)+'</td>'
+      +'<td>'+capsCells(e.caps)+'</td>';
+    tb.appendChild(tr);
+  }
+}
+function renderResult(res){
+  $('versions').textContent='语法 '+res.syntaxVersion+' · Unicode '+res.unicodeVersion;
+  let sum = badge(res.status);
+  if(res.status==='match'){
+    sum += ' 匹配 <code>'+esc(res.input.slice(0,0))+'' ;
+    const s=res.startByte, e=res.endByte;
+    sum += 'rune '+res.start+'..'+res.end+'，byte '+s+'..'+e+'，文本 <code>'+esc(res.input)+'</code>';
+  } else if(res.status==='indeterminate'){
+    sum += ' <span class="warn">'+esc(res.reason)+'</span> — frontier 已保存，可从更大预算继续';
+  }
+  sum += ' <small class="mut">步数 '+res.stats.steps+' · 峰值状态 '+res.stats.peakStates+' · 快照 '+res.stats.snapshots+'</small>';
+  if(res.traceTruncated) sum += ' <span class="warn">轨迹已截断（上限 4000 事件）</span>';
+  $('summary').innerHTML=sum;
+  const pos = res.status==='match' ? res.start : (res.frontier && res.frontier.cur ? res.frontier.cur.pos : null);
+  $('inputView').innerHTML=renderInput(res.input, pos);
+  renderCaptures(res);
+  renderStates(null, res.frontier?res.frontier.stack:null, res.pruned);
+  renderTrace(res.trace, true);
+}
+async function runFull(){
+  try{
+    const res=await api('/api/match',{pattern:$('pattern').value,input:$('input').value,budget:budget(),optimize:$('optimize').checked});
+    $('ast').textContent=res.ast;
+    $('prog').innerHTML=(res.program||[]).map((l,i)=>esc(l)).join('\n');
+    renderResult(res);
+    loadRuns();
+  }catch(e){ alert('错误：'+e.message); }
+}
+async function parseOnly(){
+  try{
+    const d=await api('/api/parse',{pattern:$('pattern').value,optimize:$('optimize').checked});
+    $('ast').textContent=d.ast;
+    $('prog').innerHTML=(d.program||[]).map(l=>esc(l)).join('\n');
+    $('versions').textContent='语法 '+d.syntaxVersion+' · Unicode '+d.unicodeVersion+' · 捕获组 '+d.groupCount;
+  }catch(e){ alert('错误：'+e.message); }
+}
+async function newSession(){
+  try{
+    const d=await api('/api/session',{pattern:$('pattern').value,input:$('input').value,budget:budget(),optimize:$('optimize').checked});
+    sessionId=d.id; $('sessId').textContent=d.id;
+    $('versions').textContent='语法 '+d.syntaxVersion+' · Unicode '+d.unicodeVersion;
+    $('prog').innerHTML=(d.program||[]).map(l=>esc(l)).join('\n');
+    $('trace').innerHTML='';
+    $('sessStatus').innerHTML='<span class="badge b-run">running</span>';
+    $('summary').textContent='会话已创建：单步或运行到断点。';
+    $('ast').textContent='';
+  }catch(e){ alert('错误：'+e.message); }
+}
+function breakpoints(){
+  return $('breakpoints').value.split(',').map(s=>+s.trim()).filter(n=>Number.isInteger(n));
+}
+async function stepN(n){
+  if(!sessionId) return;
+  const d=await api('/api/session/step',{id:sessionId,count:n,breakpoints:breakpoints()});
+  renderTrace(d.events,false);
+  renderStates(d.cur,d.stack);
+  $('inputView').innerHTML=renderInput($('input').value, d.cur?d.cur.pos:null);
+  $('sessStatus').innerHTML=badge(d.status)+(d.breakpoint?' <span class="warn">命中断点</span>':'');
+  if(d.result){ finishSession(d.result); }
+}
+async function runToBreakpoint(){
+  if(!sessionId) return;
+  const d=await api('/api/session/step',{id:sessionId,count:1000000,breakpoints:breakpoints()});
+  renderTrace(d.events,false);
+  renderStates(d.cur,d.stack);
+  $('sessStatus').innerHTML=badge(d.status)+(d.breakpoint?' <span class="warn">命中断点</span>':'');
+  if(d.result) finishSession(d.result);
+}
+async function resumeFrontier(){
+  if(!sessionId) return;
+  const b=budget();
+  if(!b.maxSteps) b.maxSteps=200000;
+  b.maxSteps*=10; b.maxStates*=10; b.maxSnapshots*=10;
+  const d=await api('/api/session/resume',{id:sessionId,budget:b});
+  renderTrace(d.events,false);
+  renderStates(d.cur,d.stack);
+  if(d.result) finishSession(d.result);
+  $('sessStatus').innerHTML=badge(d.status);
+}
+function finishSession(res){
+  $('ast').textContent=res.ast;
+  renderResult(res);
+  loadRuns();
+}
